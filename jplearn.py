@@ -1,4 +1,5 @@
 import numpy as np
+from collections import Counter
 
 class Node:
     """A single node in the decision tree."""
@@ -105,3 +106,106 @@ class DecisionTreeClassifier:
                 node = node.right
         return node.value
 
+# Random forest classifier which builds on the simple tree model
+
+class RandomForestClassifier:
+    def __init__(self, n_trees=10, max_depth=5, min_samples_split=2, max_features=None):
+        self.n_trees = n_trees
+        self.max_depth = max_depth
+        self.min_samples_split = min_samples_split
+        self.max_features = max_features  # Number of features to consider at each split
+        self.trees = []
+
+    def fit(self, X, y):
+        self.trees = []
+
+        for _ in range(self.n_trees):
+            # Bootstrap sample (with replacement)
+            indices = np.random.choice(len(X), size=len(X), replace=True)
+            X_sample, y_sample = X[indices], y[indices]
+
+            # Create a fresh decision tree
+            tree = DecisionTreeClassifier(
+                max_depth=self.max_depth,
+                min_samples_split=self.min_samples_split
+            )
+
+            # Monkey-patch to inject feature sampling (optional)
+            if self.max_features is not None:
+                tree._find_best_split = self._patched_find_best_split(tree, self.max_features)
+
+            tree.fit(X_sample, y_sample)
+            self.trees.append(tree)
+
+    def predict(self, X):
+        # Get predictions from all trees
+        tree_preds = np.array([tree.predict(X) for tree in self.trees])
+        # Transpose to get predictions per sample
+        return np.array([self._majority_vote(row) for row in tree_preds.T])
+
+    def _majority_vote(self, votes):
+        vote_counts = Counter(votes)
+        return vote_counts.most_common(1)[0][0]
+
+    def _patched_find_best_split(self, tree, max_features):
+        """Injects random feature subset logic into the tree."""
+        def patched(X, y):
+            feature_indices = np.random.choice(X.shape[1], max_features, replace=False)
+            best_gain = -1
+            best_feature = None
+            best_threshold = None
+
+            for feature in feature_indices:
+                thresholds = np.unique(X[:, feature])
+                for threshold in thresholds:
+                    left_mask = X[:, feature] < threshold
+                    right_mask = ~left_mask
+
+                    if len(y[left_mask]) == 0 or len(y[right_mask]) == 0:
+                        continue
+
+                    gain = tree._gini_gain(y, y[left_mask], y[right_mask])
+                    if gain > best_gain:
+                        best_gain = gain
+                        best_feature = feature
+                        best_threshold = threshold
+
+            return best_feature, best_threshold
+        return patched
+
+# ----------------------------------------------------- #
+# KNN
+
+class KNNClassifier:
+    def __init__(self, k=3):
+        self.k = k
+        self.X_train = None
+        self.y_train = None
+
+    def fit(self, X, y):
+        """Store the training data."""
+        self.X_train = np.array(X)
+        self.y_train = np.array(y)
+
+    def _euclidean_distance(self, x1, x2):
+        """Compute the Euclidean distance between two points."""
+        return np.sqrt(np.sum((x1 - x2) ** 2))
+
+    def _predict_one(self, x):
+        """Predict the label for a single data point."""
+        # Compute distances to all training points
+        distances = [self._euclidean_distance(x, x_train) for x_train in self.X_train]
+        
+        # Get indices of k nearest neighbors
+        k_indices = np.argsort(distances)[:self.k]
+        
+        # Get the labels of the k nearest neighbors
+        k_neighbor_labels = self.y_train[k_indices]
+        
+        # Return the most common class label
+        most_common = Counter(k_neighbor_labels).most_common(1)
+        return most_common[0][0]
+
+    def predict(self, X):
+        """Predict the labels for multiple data points."""
+        return [self._predict_one(np.array(x)) for x in X]
